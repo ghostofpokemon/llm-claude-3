@@ -1,12 +1,13 @@
 from anthropic import Anthropic
 import llm
 from pydantic import Field, field_validator, model_validator
-from typing import Optional, List
-
+from typing import Optional, List, Union
+import base64
+import os
+import mimetypes
 
 @llm.hookimpl
 def register_models(register):
-    # https://docs.anthropic.com/claude/docs/models-overview
     register(ClaudeMessages("claude-3-opus-20240229"), aliases=("claude-3-opus",))
     register(ClaudeMessages("claude-3-sonnet-20240229"), aliases=("claude-3-sonnet",))
     register(ClaudeMessages("claude-3-haiku-20240307"), aliases=("claude-3-haiku",))
@@ -20,24 +21,24 @@ class ClaudeOptions(llm.Options):
         description="The maximum number of tokens to generate before stopping",
         default=4_096,
     )
-
     temperature: Optional[float] = Field(
-        description="Amount of randomness injected into the response. Defaults to 1.0. Ranges from 0.0 to 1.0. Use temperature closer to 0.0 for analytical / multiple choice, and closer to 1.0 for creative and generative tasks. Note that even with temperature of 0.0, the results will not be fully deterministic.",
+        description="Amount of randomness injected into the response. Defaults to 1.0. Ranges from 0.0 to 1.0.",
         default=1.0,
     )
-
     top_p: Optional[float] = Field(
-        description="Use nucleus sampling. In nucleus sampling, we compute the cumulative distribution over all the options for each subsequent token in decreasing probability order and cut it off once it reaches a particular probability specified by top_p. You should either alter temperature or top_p, but not both. Recommended for advanced use cases only. You usually only need to use temperature.",
+        description="Use nucleus sampling. Recommended for advanced use cases only.",
         default=None,
     )
-
     top_k: Optional[int] = Field(
-        description="Only sample from the top K options for each subsequent token. Used to remove 'long tail' low probability responses. Recommended for advanced use cases only. You usually only need to use temperature.",
+        description="Only sample from the top K options for each subsequent token.",
         default=None,
     )
-
     user_id: Optional[str] = Field(
         description="An external identifier for the user who is associated with the request",
+        default=None,
+    )
+    images: Optional[Union[str, List[str]]] = Field(
+        description="Image file path(s) to be included in the request",
         default=None,
     )
 
@@ -70,12 +71,23 @@ class ClaudeOptions(llm.Options):
             raise ValueError("top_k must be a positive integer")
         return top_k
 
+    @field_validator("images")
+    @classmethod
+    def validate_images(cls, images):
+        if images is None:
+            return None
+        if isinstance(images, str):
+            images = [img.strip() for img in images.split(',')]
+        for image_path in images:
+            if not os.path.isfile(image_path):
+                raise ValueError(f"Image file not found: {image_path}")
+        return images
+
     @model_validator(mode="after")
     def validate_temperature_top_p(self):
         if self.temperature != 1.0 and self.top_p is not None:
             raise ValueError("Only one of temperature and top_p can be set")
         return self
-
 
 class ClaudeMessages(llm.Model):
     needs_key = "claude"
@@ -89,20 +101,44 @@ class ClaudeMessages(llm.Model):
         self.claude_model_id = claude_model_id or model_id
         self.extra_headers = extra_headers
 
-    def build_messages(self, prompt, conversation) -> List[dict]:
+    def process_images(self, image_paths):
+        if not image_paths:
+            return []
+
+        processed_images = []
+        for image_path in image_paths:
+            with open(image_path, "rb") as image_file:
+                image_data = base64.b64encode(image_file.read()).decode("utf-8")
+                mime_type, _ = mimetypes.guess_type(image_path)
+                if mime_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+                    raise ValueError(f"Unsupported image type: {mime_type}")
+                processed_images.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime_type,
+                        "data": image_data,
+                    }
+                })
+        return processed_images
+
+    def build_messages(self, prompt, conversation):
         messages = []
         if conversation:
             for response in conversation.responses:
-                messages.extend(
-                    [
-                        {
-                            "role": "user",
-                            "content": response.prompt.prompt,
-                        },
-                        {"role": "assistant", "content": response.text()},
-                    ]
-                )
-        messages.append({"role": "user", "content": prompt.prompt})
+                user_content = [{"type": "text", "text": response.prompt.prompt}]
+                if response.prompt.options.images:
+                    user_content.extend(self.process_images(response.prompt.options.images))
+                messages.extend([
+                    {"role": "user", "content": user_content},
+                    {"role": "assistant", "content": response.text()},
+                ])
+
+        user_content = [{"type": "text", "text": prompt.prompt}]
+        if prompt.options.images:
+            user_content.extend(self.process_images(prompt.options.images))
+        messages.append({"role": "user", "content": user_content})
+
         return messages
 
     def execute(self, prompt, stream, response, conversation):
@@ -134,7 +170,6 @@ class ClaudeMessages(llm.Model):
             with client.messages.stream(**kwargs) as stream:
                 for text in stream.text_stream:
                     yield text
-                # This records usage and other data:
                 response.response_json = stream.get_final_message().model_dump()
         else:
             completion = client.messages.create(**kwargs)
