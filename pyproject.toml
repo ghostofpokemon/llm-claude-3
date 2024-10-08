@@ -1,10 +1,6 @@
 [project]
 name = "llm-claude-3"
-<<<<<<< HEAD
 version = "0.4.1"
-=======
-version = "0.4.2"
->>>>>>> f6f9fcd (images)
 description = "LLM access to Claude 3 by Anthropic"
 readme = "README.md"
 authors = [{name = "Simon Willison"}]
