@@ -6,8 +6,10 @@ import base64
 import os
 import mimetypes
 
+
 @llm.hookimpl
 def register_models(register):
+    # https://docs.anthropic.com/claude/docs/models-overview
     register(ClaudeMessages("claude-3-opus-20240229"), aliases=("claude-3-opus",))
     register(ClaudeMessages("claude-3-sonnet-20240229"), aliases=("claude-3-sonnet",))
     register(ClaudeMessages("claude-3-haiku-20240307"), aliases=("claude-3-haiku",))
@@ -15,27 +17,33 @@ def register_models(register):
         ClaudeMessagesLong("claude-3-5-sonnet-20240620"), aliases=("claude-3.5-sonnet",)
     )
 
+
 class ClaudeOptions(llm.Options):
     max_tokens: Optional[int] = Field(
         description="The maximum number of tokens to generate before stopping",
         default=4_096,
     )
+
     temperature: Optional[float] = Field(
-        description="Amount of randomness injected into the response. Defaults to 1.0. Ranges from 0.0 to 1.0.",
+        description="Amount of randomness injected into the response. Defaults to 1.0. Ranges from 0.0 to 1.0. Use temperature closer to 0.0 for analytical / multiple choice, and closer to 1.0 for creative and generative tasks. Note that even with temperature of 0.0, the results will not be fully deterministic.",
         default=1.0,
     )
+
     top_p: Optional[float] = Field(
-        description="Use nucleus sampling. Recommended for advanced use cases only.",
+        description="Use nucleus sampling. In nucleus sampling, we compute the cumulative distribution over all the options for each subsequent token in decreasing probability order and cut it off once it reaches a particular probability specified by top_p. You should either alter temperature or top_p, but not both. Recommended for advanced use cases only. You usually only need to use temperature.",
         default=None,
     )
+
     top_k: Optional[int] = Field(
-        description="Only sample from the top K options for each subsequent token.",
+        description="Only sample from the top K options for each subsequent token. Used to remove 'long tail' low probability responses. Recommended for advanced use cases only. You usually only need to use temperature.",
         default=None,
     )
+
     user_id: Optional[str] = Field(
         description="An external identifier for the user who is associated with the request",
         default=None,
     )
+
     images: Optional[Union[str, List[str]]] = Field(
         description="Image file path(s) to be included in the request",
         default=None,
@@ -46,7 +54,7 @@ class ClaudeOptions(llm.Options):
     def validate_max_tokens(cls, max_tokens):
         real_max = cls.model_fields["max_tokens"].default
         if not (0 < max_tokens <= real_max):
-            raise ValueError(f"max_tokens must be in range 1-{real_max}")
+            raise ValueError("max_tokens must be in range 1-{}".format(real_max))
         return max_tokens
 
     @field_validator("temperature")
@@ -70,6 +78,12 @@ class ClaudeOptions(llm.Options):
             raise ValueError("top_k must be a positive integer")
         return top_k
 
+    @model_validator(mode="after")
+    def validate_temperature_top_p(self):
+        if self.temperature != 1.0 and self.top_p is not None:
+            raise ValueError("Only one of temperature and top_p can be set")
+        return self
+
     @field_validator("images")
     @classmethod
     def validate_images(cls, images):
@@ -82,11 +96,7 @@ class ClaudeOptions(llm.Options):
                 raise ValueError(f"Image file not found: {image_path}")
         return images
 
-    @model_validator(mode="after")
-    def validate_temperature_top_p(self):
-        if self.temperature != 1.0 and self.top_p is not None:
-            raise ValueError("Only one of temperature and top_p can be set")
-        return self
+
 
 class ClaudeMessages(llm.Model):
     needs_key = "claude"
@@ -137,7 +147,6 @@ class ClaudeMessages(llm.Model):
         if prompt.options.images:
             user_content.extend(self.process_images(prompt.options.images))
         messages.append({"role": "user", "content": user_content})
-
         return messages
 
     def execute(self, prompt, stream, response, conversation):
@@ -169,6 +178,7 @@ class ClaudeMessages(llm.Model):
             with client.messages.stream(**kwargs) as stream:
                 for text in stream.text_stream:
                     yield text
+                # This records usage and other data:
                 response.response_json = stream.get_final_message().model_dump()
         else:
             completion = client.messages.create(**kwargs)
@@ -176,7 +186,8 @@ class ClaudeMessages(llm.Model):
             response.response_json = completion.model_dump()
 
     def __str__(self):
-        return f"Anthropic Messages: {self.model_id}"
+        return "Anthropic Messages: {}".format(self.model_id)
+
 
 class ClaudeMessagesLong(ClaudeMessages):
     class Options(ClaudeOptions):
