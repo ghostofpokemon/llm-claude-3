@@ -45,7 +45,7 @@ class ClaudeOptions(llm.Options):
     )
 
     images: Optional[Union[str, List[str]]] = Field(
-        description="Image file path(s) to be included in the request",
+        description="Image file path(s) to be included in the request. Can be a comma-separated string or a list of strings.",
         default=None,
     )
 
@@ -54,7 +54,7 @@ class ClaudeOptions(llm.Options):
     def validate_max_tokens(cls, max_tokens):
         real_max = cls.model_fields["max_tokens"].default
         if not (0 < max_tokens <= real_max):
-            raise ValueError("max_tokens must be in range 1-{}".format(real_max))
+            raise ValueError(f"max_tokens must be in range 1-{real_max}")
         return max_tokens
 
     @field_validator("temperature")
@@ -89,16 +89,22 @@ class ClaudeOptions(llm.Options):
     def validate_images(cls, images):
         if images is None:
             return None
+
         if isinstance(images, str):
-            images = [img.strip() for img in images.split(',')]
+            # Split the string by commas or spaces
+            image_paths = [path.strip() for path in images.replace(',', ' ').split()]
+        elif isinstance(images, list):
+            image_paths = images
+        else:
+            raise ValueError("images must be a string or a list of strings")
+
         validated_images = []
-        for image_path in images:
+        for image_path in image_paths:
             expanded_path = os.path.expanduser(image_path)
             if not os.path.isfile(expanded_path):
                 raise ValueError(f"Image file not found: {expanded_path}")
             validated_images.append(expanded_path)
         return validated_images
-
 
 
 class ClaudeMessages(llm.Model):
@@ -189,7 +195,7 @@ class ClaudeMessages(llm.Model):
             response.response_json = completion.model_dump()
 
     def __str__(self):
-        return "Anthropic Messages: {}".format(self.model_id)
+        return f"Anthropic Messages: {self.model_id}"
 
 
 class ClaudeMessagesLong(ClaudeMessages):
