@@ -91,10 +91,13 @@ class ClaudeOptions(llm.Options):
             return None
         if isinstance(images, str):
             images = [img.strip() for img in images.split(',')]
+        validated_images = []
         for image_path in images:
-            if not os.path.isfile(image_path):
-                raise ValueError(f"Image file not found: {image_path}")
-        return images
+            expanded_path = os.path.expanduser(image_path)
+            if not os.path.isfile(expanded_path):
+                raise ValueError(f"Image file not found: {expanded_path}")
+            validated_images.append(expanded_path)
+        return validated_images
 
 
 
