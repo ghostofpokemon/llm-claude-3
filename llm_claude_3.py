@@ -111,6 +111,7 @@ class ClaudeMessages(llm.Model):
     needs_key = "claude"
     key_env_var = "ANTHROPIC_API_KEY"
     can_stream = True
+    conversation_contexts = {}  # Class variable to store contexts
 
     class Options(ClaudeOptions): ...
 
@@ -125,45 +126,57 @@ class ClaudeMessages(llm.Model):
 
         processed_images = []
         for image_path in image_paths:
-            with open(image_path, "rb") as image_file:
-                image_data = base64.b64encode(image_file.read()).decode("utf-8")
-                mime_type, _ = mimetypes.guess_type(image_path)
-                if mime_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
-                    raise ValueError(f"Unsupported image type: {mime_type}")
-                processed_images.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime_type,
-                        "data": image_data,
-                    }
-                })
+            try:
+                with open(image_path, "rb") as image_file:
+                    image_data = base64.b64encode(image_file.read()).decode("utf-8")
+                    mime_type, _ = mimetypes.guess_type(image_path)
+                    if mime_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+                        print(f"Warning: Unsupported image type: {mime_type} for {image_path}")
+                        continue
+                    processed_images.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": image_data,
+                        }
+                    })
+            except Exception as e:
+                print(f"Error processing image {image_path}: {str(e)}")
         return processed_images
 
     def build_messages(self, prompt, conversation):
         messages = []
+        context = self.get_conversation_context(conversation) if conversation else {}
+        images_sent = context.get('images_sent', False)
+
         if conversation:
             for response in conversation.responses:
-                user_content = [{"type": "text", "text": response.prompt.prompt}]
-                if response.prompt.options.images:
-                    user_content.extend(self.process_images(response.prompt.options.images))
                 messages.extend([
-                    {"role": "user", "content": user_content},
+                    {"role": "user", "content": response.prompt.prompt},
                     {"role": "assistant", "content": response.text()},
                 ])
 
         user_content = [{"type": "text", "text": prompt.prompt}]
-        if prompt.options.images:
+        if prompt.options.images and not images_sent:
             user_content.extend(self.process_images(prompt.options.images))
+            images_sent = True
+
         messages.append({"role": "user", "content": user_content})
-        return messages
+
+        if conversation:
+            self.set_conversation_context(conversation, {'images_sent': images_sent})
+
+        return messages, images_sent
 
     def execute(self, prompt, stream, response, conversation):
         client = Anthropic(api_key=self.get_key())
 
+        messages, images_sent = self.build_messages(prompt, conversation)
+
         kwargs = {
             "model": self.claude_model_id,
-            "messages": self.build_messages(prompt, conversation),
+            "messages": messages,
             "max_tokens": prompt.options.max_tokens,
         }
         if prompt.options.user_id:
@@ -187,12 +200,19 @@ class ClaudeMessages(llm.Model):
             with client.messages.stream(**kwargs) as stream:
                 for text in stream.text_stream:
                     yield text
-                # This records usage and other data:
                 response.response_json = stream.get_final_message().model_dump()
         else:
             completion = client.messages.create(**kwargs)
             yield completion.content[0].text
             response.response_json = completion.model_dump()
+
+    @classmethod
+    def get_conversation_context(cls, conversation):
+        return cls.conversation_contexts.get(id(conversation), {})
+
+    @classmethod
+    def set_conversation_context(cls, conversation, context):
+        cls.conversation_contexts[id(conversation)] = context
 
     def __str__(self):
         return f"Anthropic Messages: {self.model_id}"
