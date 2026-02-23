@@ -1,5 +1,8 @@
 # llm-claude-3
 
+> [!WARNING]
+> **DEPRECATED**: This plugin has been deprecated and its features have been consolidated into `llm-anthropic`. Please use [`llm-anthropic`](https://github.com/ghostofpokemon/llm-anthropic) for access to Claude 3, 3.5, and 3.7 models with full support for system prompts, Vision, tools, async execution, and thinking models.
+
 [![PyPI](https://img.shields.io/pypi/v/llm-claude-3.svg)](https://pypi.org/project/llm-claude-3/)
 [![Changelog](https://img.shields.io/github/v/release/simonw/llm-claude-3?include_prereleases&label=changelog)](https://github.com/simonw/llm-claude-3/releases)
 [![Tests](https://github.com/simonw/llm-claude-3/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-claude-3/actions/workflows/test.yml)
